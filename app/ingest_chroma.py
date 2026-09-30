@@ -1,9 +1,10 @@
 from pathlib import Path
+import hashlib
+import math
 import re
-import pandas as pd
 
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
+import pandas as pd
+import chromadb
 
 
 # ==================================================
@@ -13,16 +14,93 @@ from langchain_huggingface import HuggingFaceEmbeddings
 BASE_DIR = Path("data/spiderman/databases")
 CHROMA_DIR = "data/chroma"
 
+# Keep the same dimensionality as all-MiniLM-L6-v2.
+# We generate deterministic lightweight embeddings ourselves.
+EMBEDDING_DIM = 384
+
 
 # ==================================================
-# 2. Extract one table schema
+# 2. Lightweight deterministic embedding
 # ==================================================
 
-def extract_table_schema(sql, database_name, table_name):
+def generate_embedding(text: str, dimension: int = EMBEDDING_DIM):
+    """
+    Generate a deterministic lightweight embedding without
+    downloading or loading any ML model.
+
+    This is intentionally used only so Chroma has valid
+    vector representations. QueryClarify's production RAG
+    currently retrieves records with .get() and performs
+    its own schema/table scoring.
+    """
+
+    vector = [0.0] * dimension
+
+    # Tokenize text.
+    tokens = re.findall(
+        r"[a-zA-Z0-9_]+",
+        text.lower()
+    )
+
+    if not tokens:
+        return vector
+
+    for token in tokens:
+
+        digest = hashlib.sha256(
+            token.encode("utf-8")
+        ).digest()
+
+        # Generate several deterministic positions
+        # from the SHA-256 digest.
+        for offset in range(0, len(digest), 4):
+
+            chunk = digest[offset:offset + 4]
+
+            if len(chunk) < 4:
+                continue
+
+            index = int.from_bytes(
+                chunk,
+                byteorder="little"
+            ) % dimension
+
+            sign = (
+                1.0
+                if digest[offset] % 2 == 0
+                else -1.0
+            )
+
+            vector[index] += sign
+
+    # Normalize vector.
+    magnitude = math.sqrt(
+        sum(value * value for value in vector)
+    )
+
+    if magnitude > 0:
+
+        vector = [
+            value / magnitude
+            for value in vector
+        ]
+
+    return vector
+
+
+# ==================================================
+# 3. Extract one table schema
+# ==================================================
+
+def extract_table_schema(
+    sql,
+    database_name,
+    table_name
+):
 
     pattern = (
-        rf"CREATE TABLE\s+\`{re.escape(database_name)}\`\."
-        rf"\`{re.escape(table_name)}\`\s*\((.*?)\)\s*;"
+        rf"CREATE TABLE\s+`{re.escape(database_name)}`\."
+        rf"`{re.escape(table_name)}`\s*\((.*?)\)\s*;"
     )
 
     match = re.search(
@@ -117,7 +195,7 @@ def extract_table_schema(sql, database_name, table_name):
 
 
 # ==================================================
-# 3. Extract all tables from one database
+# 4. Extract all tables from one database
 # ==================================================
 
 def extract_database_schema(db_dir):
@@ -134,8 +212,8 @@ def extract_database_schema(db_dir):
     database_name = db_dir.name
 
     table_matches = re.findall(
-        rf"CREATE TABLE\s+\`{re.escape(database_name)}\`\."
-        rf"\`([^`]+)\`",
+        rf"CREATE TABLE\s+`{re.escape(database_name)}`\."
+        rf"`([^`]+)`",
         sql,
         re.IGNORECASE
     )
@@ -157,7 +235,7 @@ def extract_database_schema(db_dir):
 
 
 # ==================================================
-# 4. Extract sample values from CSV
+# 5. Extract sample values from CSV
 # ==================================================
 
 def extract_sample_values(
@@ -173,7 +251,7 @@ def extract_sample_values(
 
     csv_file = None
 
-    # Find matching CSV case-insensitively
+    # Find matching CSV case-insensitively.
     for file in data_dir.glob("*.csv"):
 
         if file.stem.lower() == table_name.lower():
@@ -220,7 +298,7 @@ def extract_sample_values(
 
 
 # ==================================================
-# 5. Convert schema + values into RAG document
+# 6. Convert schema + values into RAG document
 # ==================================================
 
 def create_document(
@@ -308,62 +386,161 @@ def create_document(
 
 
 # ==================================================
-# 6. Build all documents
+# 7. Build all documents
 # ==================================================
 
 print("\n================================")
-print("BUILDING VALUE-AWARE DOCUMENTS")
+print("BUILDING PRODUCTION RAG INDEX")
 print("================================")
 
 
-database_dirs = [
-    path
-    for path in BASE_DIR.iterdir()
-    if path.is_dir()
-]
+if not BASE_DIR.exists():
+
+    raise FileNotFoundError(
+        f"SpiderMan database directory not found: "
+        f"{BASE_DIR}"
+    )
+
+
+database_dirs = sorted(
+    [
+        path
+        for path in BASE_DIR.iterdir()
+        if path.is_dir()
+    ],
+    key=lambda p: p.name.lower()
+)
 
 
 documents = []
 metadatas = []
 ids = []
+embeddings = []
+
+database_documents = []
+database_metadatas = []
+database_ids = []
+database_embeddings = []
 
 
-for db_dir in database_dirs:
+print(
+    f"Databases discovered: "
+    f"{len(database_dirs)}"
+)
+
+
+# ==================================================
+# 8. Process databases
+# ==================================================
+
+for db_index, db_dir in enumerate(
+    database_dirs,
+    start=1
+):
+
+    database_name = db_dir.name
 
     tables = extract_database_schema(
         db_dir
     )
 
-    for table in tables:
+    if not tables:
 
-        # Extract actual CSV values
-        sample_values = extract_sample_values(
-            db_dir,
-            table["table"]
+        print(
+            f"WARNING: No tables found in "
+            f"{database_name}"
         )
 
-        # Create RAG document
+    # --------------------------------------------------
+    # Database routing document
+    # --------------------------------------------------
+
+    database_document_lines = [
+        f"DATABASE: {database_name}",
+        "TABLES:"
+    ]
+
+    for table in tables:
+
+        database_document_lines.append(
+            f"- {table['table']}"
+        )
+
+    database_document = "\n".join(
+        database_document_lines
+    )
+
+    database_documents.append(
+        database_document
+    )
+
+    database_metadatas.append({
+        "database": database_name
+    })
+
+    database_ids.append(
+        database_name
+    )
+
+    database_embeddings.append(
+        generate_embedding(
+            database_document
+        )
+    )
+
+    # --------------------------------------------------
+    # Table documents
+    # --------------------------------------------------
+
+    for table in tables:
+
+        table_name = table["table"]
+
+        sample_values = extract_sample_values(
+            db_dir,
+            table_name
+        )
+
         document = create_document(
             table,
             sample_values
         )
 
-        database = table["database"]
-        table_name = table["table"]
-
-        # Stable unique ID
         document_id = (
-            f"{database}::{table_name}"
+            f"{database_name}::{table_name}"
         )
 
-        documents.append(document)
+        documents.append(
+            document
+        )
 
         metadatas.append({
-            "database": database,
+            "database": database_name,
             "table": table_name
         })
 
-        ids.append(document_id)
+        ids.append(
+            document_id
+        )
+
+        embeddings.append(
+            generate_embedding(
+                document
+            )
+        )
+
+    # Progress every 25 databases.
+    if (
+        db_index == 1
+        or db_index % 25 == 0
+        or db_index == len(database_dirs)
+    ):
+
+        print(
+            f"Processed "
+            f"{db_index}/{len(database_dirs)} "
+            f"databases..."
+        )
 
 
 print(
@@ -372,90 +549,141 @@ print(
 )
 
 print(
-    f"Documents created: "
+    f"Table documents created: "
     f"{len(documents)}"
 )
 
+print(
+    f"Database documents created: "
+    f"{len(database_documents)}"
+)
+
 
 # ==================================================
-# 7. Initialize embeddings
+# 9. Initialize Chroma
 # ==================================================
 
 print("\n================================")
-print("LOADING EMBEDDING MODEL")
+print("INITIALIZING CHROMA")
 print("================================")
 
+print(
+    "Embedding model: NONE"
+)
 
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
+print(
+    "Generating lightweight deterministic vectors..."
+)
+
+print(
+    f"Embedding dimension: "
+    f"{EMBEDDING_DIM}"
+)
+
+
+client = chromadb.PersistentClient(
+    path=CHROMA_DIR
 )
 
 
 # ==================================================
-# 8. Rebuild Chroma database
+# 10. Rebuild schema collection
 # ==================================================
 
-print("\n================================")
-print("REBUILDING CHROMA DATABASE")
-print("================================")
+print("\nRebuilding spiderman_schema...")
 
 
-vectorstore = Chroma(
-    collection_name="spiderman_schema",
-    persist_directory=CHROMA_DIR,
-    embedding_function=embeddings
-)
+try:
 
-
-# --------------------------------------------------
-# Delete old documents
-# --------------------------------------------------
-
-print("\nRemoving old documents...")
-
-
-existing_data = vectorstore.get()
-
-existing_ids = existing_data.get(
-    "ids",
-    []
-)
-
-
-if existing_ids:
-
-    vectorstore.delete(
-        ids=existing_ids
+    client.delete_collection(
+        name="spiderman_schema"
     )
 
-    print(
-        f"Deleted old documents: "
-        f"{len(existing_ids)}"
-    )
-
-else:
-
-    print(
-        "No existing documents found."
-    )
+except Exception:
+    pass
 
 
-# ==================================================
-# 9. Insert new documents
-# ==================================================
-
-print("\nAdding value-aware documents...")
-
-
-vectorstore.add_texts(
-    texts=documents,
-    metadatas=metadatas,
-    ids=ids
+schema_collection = client.get_or_create_collection(
+    name="spiderman_schema",
+    metadata={
+        "description":
+            "SpiderMan table schemas for QueryClarify",
+        "embedding_dimension":
+            EMBEDDING_DIM
+    }
 )
 
 
 # ==================================================
-# 10. Verify ingestion
+# 11. Insert schema documents
+# ==================================================
+
+print(
+    f"Adding {len(documents)} table documents..."
+)
+
+
+if documents:
+
+    schema_collection.add(
+        ids=ids,
+        documents=documents,
+        metadatas=metadatas,
+        embeddings=embeddings
+    )
+
+
+# ==================================================
+# 12. Rebuild database collection
+# ==================================================
+
+print("\nRebuilding spiderman_databases...")
+
+
+try:
+
+    client.delete_collection(
+        name="spiderman_databases"
+    )
+
+except Exception:
+    pass
+
+
+database_collection = client.get_or_create_collection(
+    name="spiderman_databases",
+    metadata={
+        "description":
+            "SpiderMan database routing metadata",
+        "embedding_dimension":
+            EMBEDDING_DIM
+    }
+)
+
+
+# ==================================================
+# 13. Insert database documents
+# ==================================================
+
+print(
+    f"Adding "
+    f"{len(database_documents)} "
+    f"database documents..."
+)
+
+
+if database_documents:
+
+    database_collection.add(
+        ids=database_ids,
+        documents=database_documents,
+        metadatas=database_metadatas,
+        embeddings=database_embeddings
+    )
+
+
+# ==================================================
+# 14. Verify ingestion
 # ==================================================
 
 print("\n================================")
@@ -463,56 +691,148 @@ print("CHROMA INGESTION COMPLETE")
 print("================================")
 
 
+schema_count = (
+    schema_collection.count()
+)
+
+database_count = (
+    database_collection.count()
+)
+
+
 print(
-    f"Documents inserted: "
+    f"Schema documents: "
+    f"{schema_count}"
+)
+
+print(
+    f"Database documents: "
+    f"{database_count}"
+)
+
+print(
+    f"Expected databases: "
+    f"{len(database_dirs)}"
+)
+
+print(
+    f"Expected tables: "
     f"{len(documents)}"
 )
 
-print(
-    "Chroma collection: "
-    "spiderman_schema"
-)
+
+# ==================================================
+# 15. Validate counts
+# ==================================================
+
+if database_count != len(database_dirs):
+
+    raise RuntimeError(
+        "Database collection count mismatch: "
+        f"expected {len(database_dirs)}, "
+        f"got {database_count}"
+    )
+
+
+if schema_count != len(documents):
+
+    raise RuntimeError(
+        "Schema collection count mismatch: "
+        f"expected {len(documents)}, "
+        f"got {schema_count}"
+    )
 
 
 # ==================================================
-# 11. Test retrieval
+# 16. Test database retrieval
 # ==================================================
-
-test_question = (
-    "Which students participate "
-    "in Mountain Climbing?"
-)
-
 
 print("\n================================")
-print("RETRIEVAL TEST")
+print("DATABASE ROUTING TEST")
 print("================================")
 
+
+test_database = (
+    database_collection.get(
+        ids=["college_3"]
+    )
+)
+
+
 print(
-    f"Question: {test_question}"
+    "college_3 found:",
+    bool(
+        test_database.get("ids")
+    )
 )
 
 
-results = vectorstore.similarity_search(
-    test_question,
-    k=10
+# ==================================================
+# 17. Test schema retrieval
+# ==================================================
+
+print("\n================================")
+print("SCHEMA RETRIEVAL TEST")
+print("================================")
+
+
+test_schema = (
+    schema_collection.get(
+        ids=[
+            "college_3::Student",
+            "college_3::Course",
+            "college_3::Enrolled_in"
+        ]
+    )
 )
 
 
-print("\nRetrieved tables:")
-
-
-for i, result in enumerate(
-    results,
-    1
-):
-
-    print(
-        f"\n{i}. "
-        f"{result.metadata['database']}::"
-        f"{result.metadata['table']}"
+print(
+    "Retrieved schema documents:",
+    len(
+        test_schema.get(
+            "ids",
+            []
+        )
     )
+)
 
-    print(
-        result.page_content
-    )
+
+# ==================================================
+# 18. Final verification
+# ==================================================
+
+print("\n================================")
+print("PRODUCTION RAG INDEX READY")
+print("================================")
+
+
+print(
+    f"157-DB target: "
+    f"{database_count}/{len(database_dirs)}"
+)
+
+print(
+    f"Table target: "
+    f"{schema_count}/{len(documents)}"
+)
+
+print(
+    "Embedding model: NONE"
+)
+
+print(
+    "HuggingFace: DISABLED"
+)
+
+print(
+    "ONNX: DISABLED"
+)
+
+print(
+    "sentence-transformers: DISABLED"
+)
+
+print(
+    "================================"
+)

@@ -62,7 +62,7 @@ Thumbs.db
 
 
 # QueryClarify datasets
-data/spiderman/
+data/spiderman/__pycache__/
 
 
 
