@@ -1,0 +1,16 @@
+course_id,course_name,course_description,other_details
+1,ds,p,NULL
+2,math,q,NULL
+3,os,v,NULL
+4,en,k,NULL
+5,fr,c,NULL
+6,la,n,NULL
+7,cal,l,NULL
+8,nlp,q,NULL
+9,dl,l,NULL
+10,ml,b,NULL
+11,ai,w,NULL
+12,db,q,NULL
+13,rs,v,NULL
+14,pl,p,NULL
+15,oop,d,NULL

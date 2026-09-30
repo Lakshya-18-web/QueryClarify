@@ -1,0 +1,32 @@
+-- Dialect: mysql | Database: cinema | Table Count: 3
+
+CREATE TABLE `cinema`.`film` (
+    `Film_ID` INT,
+    `Rank_in_series` INT,
+    `Number_in_season` INT,
+    `Title` TEXT,
+    `Directed_by` TEXT,
+    `Original_air_date` TEXT,
+    `Production_code` TEXT,
+    PRIMARY KEY (`Film_ID`)
+);
+
+CREATE TABLE `cinema`.`cinema` (
+    `Cinema_ID` INT,
+    `Name` TEXT,
+    `Openning_year` INT,
+    `Capacity` INT,
+    `Location` TEXT,
+    PRIMARY KEY (`Cinema_ID`)
+);
+
+CREATE TABLE `cinema`.`schedule` (
+    `Cinema_ID` INT,
+    `Film_ID` INT,
+    `Date` TEXT,
+    `Show_times_per_day` INT,
+    `Price` FLOAT,
+    PRIMARY KEY (`Cinema_ID`, `Film_ID`),
+    FOREIGN KEY (`Cinema_ID`) REFERENCES `cinema`.`cinema` (`Cinema_ID`),
+    FOREIGN KEY (`Film_ID`) REFERENCES `cinema`.`film` (`Film_ID`)
+);

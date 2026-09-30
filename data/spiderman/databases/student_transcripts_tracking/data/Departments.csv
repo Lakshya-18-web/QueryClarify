@@ -1,0 +1,16 @@
+department_id,department_name,department_description,other_details
+1,computer science,error,NULL
+2,history,nostrum,NULL
+3,art,aliquam,NULL
+4,linguistic,natus,NULL
+5,management,nihil,NULL
+6,engineer,autem,NULL
+7,math,doloribus,NULL
+8,statistics,nihil,NULL
+9,law,dolorem,NULL
+10,economics,non,NULL
+11,biology,consequatur,NULL
+12,medical,ea,NULL
+13,dance,consequatur,NULL
+14,drama,in,NULL
+15,geography,nisi,NULL

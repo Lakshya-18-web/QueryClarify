@@ -1,0 +1,16 @@
+degree_program_id,department_id,degree_summary_name,degree_summary_description,other_details
+1,13,Master,architecto,NULL
+2,2,Master,cumque,NULL
+3,13,Master,placeat,NULL
+4,8,Bachelor,unde,NULL
+5,11,Master,officiis,NULL
+6,8,Bachelor,aperiam,NULL
+7,14,Bachelor,assumenda,NULL
+8,15,Master,earum,NULL
+9,3,Bachelor,voluptas,NULL
+10,8,Bachelor,aut,NULL
+11,14,Bachelor,aut,NULL
+12,4,Master,qui,NULL
+13,7,Bachelor,quam,NULL
+14,2,PHD,et,NULL
+15,12,PHD,esse,NULL
