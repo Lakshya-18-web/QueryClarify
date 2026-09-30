@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
@@ -10,12 +12,37 @@ router = APIRouter(
 )
 
 
+# SpiderMan databases included in the project
+SPIDERMAN_DATABASES = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "spiderman"
+    / "databases"
+)
+
+
 @router.get("")
 def list_databases():
 
+    # Prefer the complete SpiderMan dataset list.
+    # This gives the frontend all 157 databases available
+    # to QueryClarify's RAG layer.
+    if SPIDERMAN_DATABASES.exists():
+
+        databases = sorted(
+            folder.name
+            for folder in SPIDERMAN_DATABASES.iterdir()
+            if folder.is_dir()
+        )
+
+        return {
+            "count": len(databases),
+            "databases": databases,
+        }
+
+    # Fallback to databases actually available in TiDB.
     try:
-        # Use an existing loaded database only to obtain
-        # the MySQL connection.
+
         engine = get_database_engine("college_3")
 
         with engine.connect() as connection:
