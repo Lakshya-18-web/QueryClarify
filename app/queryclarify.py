@@ -16,7 +16,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from langchain_huggingface import HuggingFaceEmbeddings
 
 from langchain_chroma import Chroma
 
@@ -90,39 +89,37 @@ llm = ChatGoogleGenerativeAI(
 
 
 
-embeddings = HuggingFaceEmbeddings(
+# ---------------------------------------------------------------------------
+# Lazy Chroma initialization
+#
+# Render's free instance has a 512 MB RAM limit. The local
+# sentence-transformers model is intentionally NOT loaded by the API process.
+# ---------------------------------------------------------------------------
 
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-
-)
-
-
-
-
-
-vectorstore = Chroma(
-
-    collection_name="spiderman_schema",
-
-    embedding_function=embeddings,
-
-    persist_directory=CHROMA_DIR
-
-)
+_vectorstore = None
+_database_vectorstore = None
 
 
+def get_vectorstore():
+    """Return the persisted schema Chroma collection."""
+    global _vectorstore
+    if _vectorstore is None:
+        _vectorstore = Chroma(
+            collection_name="spiderman_schema",
+            persist_directory=CHROMA_DIR
+        )
+    return _vectorstore
 
 
-
-database_vectorstore = Chroma(
-
-    collection_name="spiderman_databases",
-
-    embedding_function=embeddings,
-
-    persist_directory=CHROMA_DIR
-
-)
+def get_database_vectorstore():
+    """Return the persisted database Chroma collection."""
+    global _database_vectorstore
+    if _database_vectorstore is None:
+        _database_vectorstore = Chroma(
+            collection_name="spiderman_databases",
+            persist_directory=CHROMA_DIR
+        )
+    return _database_vectorstore
 
 
 
@@ -994,7 +991,7 @@ def database_router_node(state: QueryState):
 
 
 
-    results = database_vectorstore.get(
+    results = get_database_vectorstore().get(
 
         include=["documents", "metadatas"]
 
@@ -1038,50 +1035,6 @@ def database_router_node(state: QueryState):
 
 
 
-    # Chroma can occasionally return an empty get() result even though
-
-    # the collection exists. Fall back to vector retrieval so a generic
-
-    # question never crashes the graph at the routing stage.
-
-    if not scored:
-
-        fallback_results = database_vectorstore.similarity_search(
-
-            question,
-
-            k=157
-
-        )
-
-
-
-        for document in fallback_results:
-
-            metadata = document.metadata or {}
-
-            database = metadata.get("database")
-
-
-
-            if not database:
-
-                continue
-
-
-
-            score = score_database(
-
-                question,
-
-                document.page_content or ""
-
-            )
-
-
-
-            scored.append((score, database))
-
 
 
     if not scored:
@@ -1092,7 +1045,7 @@ def database_router_node(state: QueryState):
 
         # instead of terminating the LangGraph execution.
 
-        metadata_result = database_vectorstore.get(
+        metadata_result = get_database_vectorstore().get(
 
             include=["metadatas"]
 
@@ -1448,7 +1401,7 @@ def rag_node(state: QueryState):
 
 
 
-    results = vectorstore.get(
+    results = get_vectorstore().get(
 
         where={
 
