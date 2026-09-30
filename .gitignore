@@ -65,8 +65,6 @@ Thumbs.db
 data/spiderman/
 
 
-# Generated ChromaDB data
-data/chroma/
 
 # Backup files
 *.bak
