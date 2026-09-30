@@ -135,11 +135,16 @@ def get_database_engine(database):
     if not re.fullmatch(r"[a-zA-Z0-9_]+", database):
         raise ValueError(f"Unsafe database name: {database}")
 
+    mysql_host = os.getenv("MYSQL_HOST", "localhost")
+    mysql_port = os.getenv("MYSQL_PORT", "3306")
+    mysql_user = os.getenv("MYSQL_USER", "root")
+
     return create_engine(
-        f"mysql+pymysql://root:{MYSQL_PASSWORD}@localhost:3306/{database}"
+        f"mysql+pymysql://{mysql_user}:{MYSQL_PASSWORD}"
+        f"@{mysql_host}:{mysql_port}/{database}"
     )
-
-
+    
+    
 def get_database_tables(database):
     engine = get_database_engine(database)
 
