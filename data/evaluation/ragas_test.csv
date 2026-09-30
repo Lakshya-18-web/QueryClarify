@@ -1,0 +1,2 @@
+index,database,question,retrieved_tables,retrieved_context_count,faithfulness,answer_relevancy,context_precision,context_recall,error
+0,battle_death,How many ships ended up being 'Captured'?,ship|death|battle,3,0.0,0.9376505917311263,0.49999999995,1.0,
