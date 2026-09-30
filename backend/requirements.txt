@@ -1,6 +1,61 @@
+# =========================
+# Backend / API
+# =========================
 fastapi
 uvicorn[standard]
 pydantic
 python-dotenv
+
+# =========================
+# Database
+# =========================
 SQLAlchemy
+PyMySQL
+cryptography
+
+# =========================
+# LangChain / LangGraph
+# =========================
+langchain
+langchain-core
+langchain-community
+langgraph
+langsmith
+
+# =========================
+# Google Gemini
+# =========================
 langchain-google-genai
+
+# =========================
+# RAG / Embeddings / Chroma
+# =========================
+chromadb
+langchain-chroma
+langchain-huggingface
+sentence-transformers
+transformers
+
+# =========================
+# Data / ML utilities
+# =========================
+numpy
+pandas
+
+# =========================
+# Evaluation
+# =========================
+ragas
+datasets
+
+# =========================
+# Testing
+# =========================
+pytest
+pytest-asyncio
+
+# =========================
+# HTTP / utilities
+# =========================
+httpx
+requests
