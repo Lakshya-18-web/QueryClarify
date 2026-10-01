@@ -41,6 +41,7 @@ from app.guardrails import (
 from app.langsmith_tracing import traced_node, tracing_status
 
 
+from app.fk_reflection import get_foreign_keys_safe      
 
 
 
@@ -352,7 +353,7 @@ def get_table_schema(database, table):
 
 
 
-    foreign_keys = inspector.get_foreign_keys(actual_table)
+    foreign_keys = get_foreign_keys_safe(engine, inspector, actual_table)
 
 
 
@@ -468,7 +469,7 @@ def get_foreign_keys(database, table):
 
 
 
-    foreign_keys = inspector.get_foreign_keys(actual_table)
+    foreign_keys = get_foreign_keys_safe(engine, inspector, actual_table)
 
 
 
@@ -1837,7 +1838,8 @@ def rag_node(state: QueryState):
 
 
 
-                foreign_keys = inspector.get_foreign_keys(
+                foreign_keys = get_foreign_keys_safe(engine, inspector,
+
 
                     table
 
@@ -2443,7 +2445,8 @@ def rag_node(state: QueryState):
 
 
 
-                foreign_keys = inspector.get_foreign_keys(
+                foreign_keys = get_foreign_keys_safe(engine, inspector,
+
 
                     table
 
