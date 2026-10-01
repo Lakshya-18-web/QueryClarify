@@ -16,7 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from langchain_huggingface import HuggingFaceEmbeddings
+
 
 from langchain_chroma import Chroma
 
@@ -79,50 +79,48 @@ if not GOOGLE_API_KEY:
 
 
 llm = ChatGoogleGenerativeAI(
-
-    model="gemini-3.6-flash",
-
+    model="gemini-3.5-flash-lite",
     google_api_key=GOOGLE_API_KEY
-
 )
 
 
 
 
-
-embeddings = HuggingFaceEmbeddings(
-
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-
-)
+_vectorstore = None
+_database_vectorstore = None
 
 
+def get_vectorstore():
+    global _vectorstore
+
+    if _vectorstore is None:
+        _vectorstore = Chroma(
+            collection_name="spiderman_schema",
+            persist_directory=CHROMA_DIR
+        )
+
+    return _vectorstore
+
+
+def get_database_vectorstore():
+    global _database_vectorstore
+
+    if _database_vectorstore is None:
+        _database_vectorstore = Chroma(
+            collection_name="spiderman_databases",
+            persist_directory=CHROMA_DIR
+        )
+
+    return _database_vectorstore
 
 
 
-vectorstore = Chroma(
-
-    collection_name="spiderman_schema",
-
-    embedding_function=embeddings,
-
-    persist_directory=CHROMA_DIR
-
-)
 
 
 
 
 
-database_vectorstore = Chroma(
 
-    collection_name="spiderman_databases",
-
-    embedding_function=embeddings,
-
-    persist_directory=CHROMA_DIR
-
-)
 
 
 
@@ -994,7 +992,7 @@ def database_router_node(state: QueryState):
 
 
 
-    results = database_vectorstore.get(
+    results = get_database_vectorstore().get(
 
         include=["documents", "metadatas"]
 
@@ -1046,7 +1044,7 @@ def database_router_node(state: QueryState):
 
     if not scored:
 
-        fallback_results = database_vectorstore.similarity_search(
+        fallback_results = get_database_vectorstore().similarity_search(
 
             question,
 
@@ -1092,7 +1090,7 @@ def database_router_node(state: QueryState):
 
         # instead of terminating the LangGraph execution.
 
-        metadata_result = database_vectorstore.get(
+        metadata_result = get_database_vectorstore().get(
 
             include=["metadatas"]
 
@@ -1448,8 +1446,7 @@ def rag_node(state: QueryState):
 
 
 
-    results = vectorstore.get(
-
+    results = get_vectorstore().get(
         where={
 
             "database": database
@@ -3122,7 +3119,7 @@ def extract_column_references(sql):
 
 
 
-    pattern = r"\b([A-Za-z_][A-Za-z0-9_]*)**\.**([A-Za-z_][A-Za-z0-9_]*)\b"
+    pattern = r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b"
 
 
 
@@ -3238,7 +3235,7 @@ def validate_sql(state: QueryState):
 
             columns = re.findall(
 
-                r"^\s*-\s*([A-Za-z0-9_]+)\s***\\(**",
+                r"^\s*-\s*([A-Za-z0-9_]+)\s*\(",
 
                 block,
 
@@ -3367,11 +3364,8 @@ def validate_sql(state: QueryState):
 
 
         qualified_table_pattern = (
-
             r"(?:FROM|JOIN)\s+"
-
-            r"([A-Za-z0-9_]+)**\.**([A-Za-z0-9_]+)"
-
+            r"([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)"
         )
 
 
