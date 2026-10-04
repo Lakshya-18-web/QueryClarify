@@ -1,0 +1,20 @@
+# --- API
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+python-multipart        # file uploads
+
+# --- databases
+sqlalchemy
+pymysql                 # built-in Spider databases (MySQL)
+pandas                  # CSV / Excel ingestion
+openpyxl                # .xlsx
+
+# --- agent / RAG
+langgraph
+langchain-google-genai
+langchain-huggingface
+langchain-chroma
+sentence-transformers
+langsmith

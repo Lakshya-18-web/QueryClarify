@@ -1,0 +1,120 @@
+# =========================
+# Python
+# =========================
+
+.venv/
+venv/
+env/
+ENV/
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Environment / Secrets
+# =========================
+
+.env
+.env.*
+!.env.example
+
+# =========================
+# IDE
+# =========================
+
+.vscode/
+.idea/
+
+# =========================
+# Jupyter
+# =========================
+
+.ipynb_checkpoints/
+
+# =========================
+# Python Tools
+# =========================
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# =========================
+# Logs
+# =========================
+
+*.log
+
+# =========================
+# OS
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+# Temporary files
+# =========================
+
+*.tmp
+*.temp
+
+
+# QueryClarify datasets
+data/spiderman/
+
+
+# Generated ChromaDB data
+data/chroma/
+
+# Backup files
+*.bak
+# User-uploaded databases and registry (never commit)
+data/user_dbs/
+data/registry.db
+data/registry.db-journal
+
+
+# =========================
+# Secrets / credentials (never commit)
+# =========================
+
+secrets/
+credentials*.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+
+# Generated grant scripts: people are told to review/edit these, and a real
+# password could end up inside. Never commit them.
+grants*.sql
+*.grants.sql
+
+
+# =========================
+# Local databases (uploads, scratch files, registry)
+# =========================
+
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.scratch
+*.building
+data/registry.db*
+# NOTE: data/builtin_databases.txt is intentionally NOT ignored: it is the
+# committed, reviewable allow-list of built-in databases (names only).
+
+
+# =========================
+# Build output / logs
+# =========================
+
+dist/
+node_modules/
+logs/
