@@ -101,7 +101,7 @@ app = FastAPI(
 # ---------------------------------------------------------
 
 # Comma-separated list, e.g. QC_CORS_ORIGINS=https://app.example.com
-origins = [
+_origins = [
     origin.strip()
     for origin in os.getenv(
         "QC_CORS_ORIGINS",
