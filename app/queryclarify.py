@@ -7,13 +7,13 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
 from langgraph.graph import StateGraph, START, END
 
 from app import db_engines, db_registry, mysql_hardening
 from app.fk_reflection import get_foreign_keys_safe
+from app.lazy_resources import LazyEmbeddings, LazyResource
 from app.secrets_redaction import redact
 from app.guardrails import (
     MAX_RESULT_ROWS,
@@ -56,23 +56,76 @@ llm = ChatGoogleGenerativeAI(
 )
 
 
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
+# ---------------------------------------------------------------------------
+# Embeddings and vector stores are built LAZILY (see app/lazy_resources.py).
+#
+# The embedding model (PyTorch + sentence-transformers) needs several hundred
+# MB, so it is loaded on the first call that really embeds text (indexing an
+# upload, semantic re-ranking for uploaded databases) and never at import time.
+# Reading stored vectors (Chroma.get) does not embed anything, so the built-in
+# routing / schema-RAG path runs without the model in memory.
+#
+# One LazyEmbeddings instance is shared by both stores: the model exists at most
+# once per process. Always go through the getters below.
+# ---------------------------------------------------------------------------
+
+_embeddings = LazyEmbeddings()
+
+_vectorstore = LazyResource(
+    lambda: Chroma(
+        collection_name="spiderman_schema",
+        embedding_function=_embeddings,
+        persist_directory=CHROMA_DIR
+    ),
+    "schema vector store"
+)
+
+_database_vectorstore = LazyResource(
+    lambda: Chroma(
+        collection_name="spiderman_databases",
+        embedding_function=_embeddings,
+        persist_directory=CHROMA_DIR
+    ),
+    "router vector store"
 )
 
 
-vectorstore = Chroma(
-    collection_name="spiderman_schema",
-    embedding_function=embeddings,
-    persist_directory=CHROMA_DIR
-)
+def get_embeddings():
+    """The shared (lazy) embedding function. Does not load the model."""
+
+    return _embeddings
 
 
-database_vectorstore = Chroma(
-    collection_name="spiderman_databases",
-    embedding_function=embeddings,
-    persist_directory=CHROMA_DIR
-)
+def get_vectorstore():
+    """Chroma collection with the table-level schema documents (thread-safe, built once)."""
+
+    return _vectorstore.get()
+
+
+def get_database_vectorstore():
+    """Chroma collection used by the database router (thread-safe, built once)."""
+
+    return _database_vectorstore.get()
+
+
+def __getattr__(name):
+    """
+    Backwards compatibility: ``queryclarify.vectorstore`` /
+    ``queryclarify.database_vectorstore`` / ``queryclarify.embeddings`` used to be
+    module globals built at import time. They still resolve (lazily) for outside
+    callers such as ``backend.services.database_service.get_store``.
+    """
+
+    if name == "vectorstore":
+        return get_vectorstore()
+
+    if name == "database_vectorstore":
+        return get_database_vectorstore()
+
+    if name == "embeddings":
+        return get_embeddings()
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _builtin_names_from_router_index():
@@ -81,7 +134,7 @@ def _builtin_names_from_router_index():
     (the ChromaDB "spiderman_databases" collection, one entry per database).
     """
 
-    results = database_vectorstore.get(include=["metadatas"])
+    results = get_database_vectorstore().get(include=["metadatas"])
 
     return [
         (metadata or {}).get("database")
@@ -575,7 +628,7 @@ def apply_semantic_bonus(question, database, scored_tables):
         return scored_tables
 
     try:
-        hits = vectorstore.similarity_search(
+        hits = get_vectorstore().similarity_search(
             question,
             k=min(6, len(scored_tables)),
             filter={"database": database}
@@ -611,7 +664,7 @@ def apply_semantic_bonus(question, database, scored_tables):
 def database_router_node(state: QueryState):
     question = state["question"]
 
-    results = database_vectorstore.get(
+    results = get_database_vectorstore().get(
         include=["documents", "metadatas"]
     )
 
@@ -637,7 +690,7 @@ def database_router_node(state: QueryState):
     # the collection exists. Fall back to vector retrieval so a generic
     # question never crashes the graph at the routing stage.
     if not scored:
-        fallback_results = database_vectorstore.similarity_search(
+        fallback_results = get_database_vectorstore().similarity_search(
             question,
             k=157
         )
@@ -660,7 +713,7 @@ def database_router_node(state: QueryState):
         # Last-resort recovery: use the database collection metadata.
         # This makes a generic question become a clarification request
         # instead of terminating the LangGraph execution.
-        metadata_result = database_vectorstore.get(
+        metadata_result = get_database_vectorstore().get(
             include=["metadatas"]
         )
 
@@ -838,7 +891,7 @@ def rag_node(state: QueryState):
     # GET RAG DOCUMENTS
     # ========================================================
 
-    results = vectorstore.get(
+    results = get_vectorstore().get(
         where={
             "database": database
         }

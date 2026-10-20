@@ -53,7 +53,7 @@ SELF = Path(__file__).resolve()
 
 _SECRET_NAME = (
     r"[A-Za-z0-9_.\-]*"
-    r"(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|apikey|private[_-]?key)"
+    r"(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|private[_-]?key)"
     r"[A-Za-z0-9_.\-]*"
 )
 
@@ -132,8 +132,28 @@ def _is_placeholder(value: str) -> bool:
     return not value.strip() or bool(_PLACEHOLDER.match(value.strip()))
 
 
+def _is_local_env_file(path: Path, relative: str) -> bool:
+    """
+    A local ``.env`` is the designated, git-ignored place for secrets, so its
+    CONTENT is not a finding. What would be a finding is git TRACKING it, which
+    ``tracked_secret_files`` reports. ``frontend/.env`` is still scanned: Vite
+    copies its values into the public JavaScript bundle.
+    """
+
+    is_env = path.name == ".env" or path.name.startswith(".env.")
+
+    return (
+        is_env
+        and path.name not in _SECRET_FILE_ALLOWED
+        and not relative.startswith("frontend/")
+    )
+
+
 def _skip(path: Path, relative: str) -> bool:
     if path.resolve() == SELF:
+        return True
+
+    if _is_local_env_file(path, relative):
         return True
 
     if any(part in SKIP_DIRS for part in path.parts):

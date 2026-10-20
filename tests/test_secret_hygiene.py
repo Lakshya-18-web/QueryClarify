@@ -29,6 +29,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _TMP = tempfile.mkdtemp(prefix="qc_hygiene_")
 os.environ.setdefault("QC_DATA_DIR", _TMP)
@@ -194,6 +195,21 @@ class NoHardcodedCredentialsTests(Isolated):
         self.assertEqual(self.scan(root_line, "tests/x.py"), [])
         word = "pass" + "word"
         self.assertTrue(self.scan(f'{word} = "sunflower9"', "tests/x.py"))
+
+    def test_local_env_files_are_not_content_scanned_except_in_the_frontend(self):
+        # A git-ignored .env is where secrets belong; the frontend's .env is copied
+        # into the PUBLIC bundle, so a secret there is a real leak.
+        root = Path(tempfile.mkdtemp(dir=_TMP))
+        (root / "frontend").mkdir()
+        key = "gsk_" + "A" * 30
+        (root / ".env").write_text(f"GROQ_KEY={key}\n")
+        (root / "app").mkdir()
+        (root / "app" / ".env.local").write_text(f"X={key}\n")
+        self.assertEqual(secret_scan.scan_repository(root), [])
+        (root / "frontend" / ".env").write_text(f"VITE_X={key}\n")
+        self.assertEqual([f.path for f in secret_scan.scan_repository(root)], ["frontend/.env"])
+        (root / ".env.example").write_text(f"X={key}\n")           # examples are always scanned
+        self.assertIn(".env.example", {f.path for f in secret_scan.scan_repository(root)})
 
     def test_scan_cli_exit_codes(self):
         clean = Path(tempfile.mkdtemp(dir=_TMP))
@@ -676,7 +692,11 @@ class RootFallbackTests(Isolated):
         self.assertNotIn(FAKE_RO_PASSWORD, findings[0])
 
     def test_default_owner_salt_is_reported(self):
-        self.assertTrue(db_registry.owner_salt_is_default())
+        # Patched explicitly: a developer's own .env may set QC_OWNER_SALT.
+        with mock.patch.object(db_registry, "_OWNER_SALT", db_registry._DEFAULT_OWNER_SALT):
+            self.assertTrue(db_registry.owner_salt_is_default())
+        with mock.patch.object(db_registry, "_OWNER_SALT", "a-long-random-" + "value"):
+            self.assertFalse(db_registry.owner_salt_is_default())
 
 
 # ===========================================================================
@@ -847,13 +867,21 @@ class SqliteDefenceLayerTests(Isolated):
         return path
 
     def bare_connection(self):
-        """A hardened connection with ONLY the authorizer removed."""
-        conn = db_engines.open_readonly_connection(self.make_db())
-        conn.set_authorizer(None)
-        self.addCleanup(conn.close)
-        return conn
+        """Open a read-only connection for independent defence-layer tests."""
+        path = self.make_db()
+        conn = db_engines.open_readonly_connection(path)
+        conn.close()
 
-    # --- layer 1: the SQLite authorizer (the engine decides, not the SQL text) ---
+        # Reopen the same file without the production authorizer so tests can
+    # inspect SQLite PRAGMAs independently.
+        uri = Path(path).resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA trusted_schema = OFF")
+
+        self.addCleanup(conn.close)
+
+        return conn    # --- layer 1: the SQLite authorizer (the engine decides, not the SQL text) ---
 
     def test_authorizer_callback_allows_reads_only(self):
         authorizer = db_engines._make_authorizer()

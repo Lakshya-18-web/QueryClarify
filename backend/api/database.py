@@ -12,6 +12,7 @@ from fastapi import (
     UploadFile,
 )
 from app import db_ingest, db_registry
+from app.lazy_resources import EmbeddingMemoryError, require_embedding_headroom
 from app.secrets_redaction import redact
 from app.queryclarify import get_database_engine, get_database_tables
 from backend.services import database_service
@@ -155,6 +156,15 @@ def upload_database(
             detail="Missing or invalid X-Client-Id header."
         )
 
+    # Indexing needs the embedding model. If this server cannot hold it, say so
+    # now (503) instead of reading and processing the upload first, or letting the
+    # operating system kill the whole service for running out of memory.
+    try:
+        require_embedding_headroom()
+
+    except EmbeddingMemoryError as e:
+        raise HTTPException(status_code=503, detail=redact(e))
+
     with tempfile.TemporaryDirectory(prefix="qc_upload_") as folder:
 
         paths = _save_uploads(files, Path(folder))
@@ -175,6 +185,9 @@ def upload_database(
 
         except PermissionError as e:
             raise HTTPException(status_code=400, detail=redact(e))
+
+        except EmbeddingMemoryError as e:
+            raise HTTPException(status_code=503, detail=redact(e))
 
         except Exception:
             # Details are logged by the service; do not leak internals.
