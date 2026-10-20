@@ -101,11 +101,11 @@ app = FastAPI(
 # ---------------------------------------------------------
 
 # Comma-separated list, e.g. QC_CORS_ORIGINS=https://app.example.com
-_origins = [
+origins = [
     origin.strip()
     for origin in os.getenv(
         "QC_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173"
+        "http://localhost:5173,http://127.0.0.1:5173,https://query-clarify.vercel.app,https://query-clarify-h4bmttvew-goal-grid.vercel.app"
     ).split(",")
     if origin.strip()
 ]
