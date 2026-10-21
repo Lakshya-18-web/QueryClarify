@@ -73,20 +73,20 @@ _embeddings = LazyEmbeddings()
 
 _vectorstore = LazyResource(
     lambda: Chroma(
-        collection_name="spiderman_schema",
+        collection_name="spiderman_schema_gemini",
         embedding_function=_embeddings,
-        persist_directory=CHROMA_DIR
+        persist_directory=CHROMA_DIR,
     ),
-    "schema vector store"
+    "schema vector store",
 )
 
 _database_vectorstore = LazyResource(
     lambda: Chroma(
-        collection_name="spiderman_databases",
+        collection_name="spiderman_databases_gemini",
         embedding_function=_embeddings,
-        persist_directory=CHROMA_DIR
+        persist_directory=CHROMA_DIR,
     ),
-    "router vector store"
+    "router vector store",
 )
 
 

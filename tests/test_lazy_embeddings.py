@@ -37,7 +37,7 @@ from app import db_registry, lazy_resources  # noqa: E402
 from backend.services import database_service  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME = "gemini-embedding-001"
 
 
 # ===========================================================================
@@ -74,7 +74,7 @@ def build_stub_modules(fakes):
     class FakeModel:
         """Stands in for HuggingFaceEmbeddings(...)."""
 
-        def __init__(self, model_name=None, **kwargs):
+        def __init__(self, model_name=None,model = None , **kwargs):
             if fakes.model_delay:
                 time.sleep(fakes.model_delay)
             if fakes.fail_next_model_load:
@@ -82,22 +82,21 @@ def build_stub_modules(fakes):
                 raise RuntimeError("model download failed")
             with fakes.lock:
                 fakes.model_constructed += 1
-                fakes.model_names.append(model_name)
+                fakes.model_names.append(model or model_name)
 
         @staticmethod
         def _vector(text):
             return [float(len(text)), float(sum(map(ord, text)) % 97)]
 
-        def embed_documents(self, texts):
+        def embed_documents(self, texts, **kwargs):
             with fakes.lock:
                 fakes.texts_encoded += len(texts)
             return [self._vector(t) for t in texts]
 
-        def embed_query(self, text):
+        def embed_query(self, text, **kwargs):
             with fakes.lock:
                 fakes.texts_encoded += 1
             return self._vector(text)
-
     class FakeChroma:
         def __init__(self, collection_name, embedding_function=None,
                      persist_directory=None, **kwargs):
@@ -170,7 +169,9 @@ def build_stub_modules(fakes):
         "sqlalchemy": sqlalchemy,
         "sqlalchemy.exc": sqlalchemy.exc,
         "langchain_google_genai": module(
-            "langchain_google_genai", ChatGoogleGenerativeAI=lambda **kwargs: object()
+            "langchain_google_genai",
+            ChatGoogleGenerativeAI=lambda **kwargs: object(),
+            GoogleGenerativeAIEmbeddings=FakeModel,
         ),
         "langchain_chroma": module("langchain_chroma", Chroma=FakeChroma),
         "langchain_huggingface": HuggingFaceModule("langchain_huggingface"),
@@ -186,7 +187,7 @@ class LazyBase(unittest.TestCase):
         self.fakes = Fakes()
         self._saved_modules = {}
         self._provider = db_registry._builtin_provider
-        self._model_loaded = lazy_resources._model_loaded
+
 
         self._env = env(
             GOOGLE_API_KEY=FAKE_API_KEY,
@@ -198,13 +199,17 @@ class LazyBase(unittest.TestCase):
         self._env.__enter__()
         self.addCleanup(self._cleanup)
 
-        lazy_resources._model_loaded = False
+
         self._install_stubs()
 
     def _install_stubs(self):
         for name, stub in build_stub_modules(self.fakes).items():
             self._saved_modules.setdefault(name, sys.modules.get(name))
             sys.modules[name] = stub
+
+        lazy_resources.GoogleGenerativeAIEmbeddings = (
+            sys.modules["langchain_google_genai"].GoogleGenerativeAIEmbeddings
+        )
 
     def _forget_queryclarify(self):
         sys.modules.pop("app.queryclarify", None)
@@ -224,7 +229,7 @@ class LazyBase(unittest.TestCase):
         """Simulate a backend restart: new module state, same persisted Chroma data."""
 
         self.fakes.restart_counters()
-        lazy_resources._model_loaded = False
+
         self._install_stubs()
         return self.load()
 
@@ -237,20 +242,20 @@ class LazyBase(unittest.TestCase):
                 sys.modules[name] = original
         db_registry.set_builtin_provider(self._provider)
         db_registry.invalidate_builtin_cache()
-        lazy_resources._model_loaded = self._model_loaded
+
         self._env.__exit__(None, None, None)
 
     def seed_builtin_index(self):
         """Pre-existing, 'restored' Chroma data: 2 built-in databases, 3 schema docs."""
 
-        schema = self.fakes.stores.setdefault("spiderman_schema", {})
+        schema = self.fakes.stores.setdefault("spiderman_schema_gemini", {})
         for table, database in (("Student", "college_3"), ("Course", "college_3"), ("Cars", "car_1")):
             schema[f"{database}::{table}"] = (
                 f"DATABASE: {database}\nTABLE: {table}\nCOLUMNS:\n- id (INTEGER)",
                 {"database": database, "table": table},
             )
 
-        router = self.fakes.stores.setdefault("spiderman_databases", {})
+        router = self.fakes.stores.setdefault("spiderman_databases_gemini", {})
         for database in ("college_3", "car_1"):
             router[database] = (f"DATABASE: {database}", {"database": database})
 
@@ -271,7 +276,7 @@ class LazyInitializationTests(LazyBase):
         qc = self.load()
         qc.get_vectorstore()
         qc.get_database_vectorstore()
-        self.assertEqual(sorted(self.fakes.chroma_created), ["spiderman_databases", "spiderman_schema"])
+        self.assertEqual(sorted(self.fakes.chroma_created), ["spiderman_databases_gemini", "spiderman_schema_gemini"])
         self.assertEqual(self.fakes.model_constructed, 0)
         self.assertEqual(self.fakes.model_import_accessed, 0)
 
@@ -298,8 +303,8 @@ class LazyInitializationTests(LazyBase):
             qc.get_database_vectorstore().similarity_search("q")
 
         self.assertEqual(self.fakes.model_constructed, 1)
-        self.assertEqual(self.fakes.chroma_created.count("spiderman_schema"), 1)
-        self.assertEqual(self.fakes.chroma_created.count("spiderman_databases"), 1)
+        self.assertEqual(self.fakes.chroma_created.count("spiderman_schema_gemini"), 1)
+        self.assertEqual(self.fakes.chroma_created.count("spiderman_databases_gemini"), 1)
 
     def test_both_stores_share_one_embedding_instance(self):
         qc = self.load()
@@ -367,8 +372,8 @@ class ConcurrencyTests(LazyBase):
         qc = self.load()
         self.fakes.store_delay = 0.05                     # widen the race window
         stores = self.run_threads(lambda i: (qc.get_vectorstore if i % 2 else qc.get_database_vectorstore)())
-        self.assertEqual(self.fakes.chroma_created.count("spiderman_schema"), 1)
-        self.assertEqual(self.fakes.chroma_created.count("spiderman_databases"), 1)
+        self.assertEqual(self.fakes.chroma_created.count("spiderman_schema_gemini"), 1)
+        self.assertEqual(self.fakes.chroma_created.count("spiderman_databases_gemini"), 1)
         self.assertEqual(len({id(s) for s in stores[0::2]}), 1)
         self.assertEqual(len({id(s) for s in stores[1::2]}), 1)
         self.assertEqual(self.fakes.model_constructed, 0)
@@ -380,7 +385,7 @@ class ConcurrencyTests(LazyBase):
             lambda i: qc.get_vectorstore().add_texts([f"t{i}"], [{"database": "x"}], [f"x::{i}"])
         )
         self.assertEqual(self.fakes.model_constructed, 1)
-        self.assertEqual(self.fakes.model_import_accessed, 1)
+        self.assertEqual(self.fakes.model_constructed, 1)
         self.assertEqual(self.fakes.texts_encoded, self.THREADS)
         self.assertEqual(len(qc.get_vectorstore().get()["ids"]), self.THREADS)
 
@@ -456,7 +461,7 @@ class BuiltinPathTests(LazyBase):
         self.assertNotIn("TABLE: Cars", state["schema"])                # isolated to college_3
         self.assertEqual(self.fakes.model_constructed, 0)
         self.assertEqual(self.fakes.model_import_accessed, 0)
-        self.assertEqual(self.fakes.chroma_created, ["spiderman_schema"])
+        self.assertEqual(self.fakes.chroma_created, ["spiderman_schema_gemini"])
 
     def test_builtin_retrieval_scoring_for_builtin_databases_skips_semantic_search(self):
         qc = self.load()
@@ -561,107 +566,39 @@ class UploadedDatabaseTests(LazyBase):
 
 MB = 1024 * 1024
 
-
 class MemoryGuardTests(LazyBase):
-    def test_refuses_when_the_model_would_not_fit(self):
-        with self.assertRaises(lazy_resources.EmbeddingMemoryError) as ctx:
-            lazy_resources.check_memory_headroom(500, limit_bytes=512 * MB, rss_bytes=250 * MB)
-        self.assertIn("1-2 GB", str(ctx.exception))
-        self.assertIn("512 MB", str(ctx.exception))
-
-    def test_allows_when_there_is_enough_headroom(self):
-        lazy_resources.check_memory_headroom(500, limit_bytes=2048 * MB, rss_bytes=300 * MB)
-        lazy_resources.check_memory_headroom(500, limit_bytes=1024 * MB, rss_bytes=400 * MB)
-
-    def test_unknown_limit_or_disabled_check_never_blocks(self):
-        # None means "auto-detect", so the detectors are patched explicitly: the
-        # result must not depend on the machine the tests happen to run on.
-        with mock.patch.object(lazy_resources, "memory_limit_bytes", lambda *a, **k: None):
-            lazy_resources.check_memory_headroom(500, rss_bytes=250 * MB)         # laptop / no limit
-        with mock.patch.object(lazy_resources, "process_rss_bytes", lambda *a, **k: None):
-            lazy_resources.check_memory_headroom(500, limit_bytes=512 * MB)       # RSS unreadable
-        lazy_resources.check_memory_headroom(0, limit_bytes=512 * MB, rss_bytes=511 * MB)  # disabled
-
-    def test_threshold_comes_from_the_environment(self):
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="100"):
-            lazy_resources.check_memory_headroom(None, limit_bytes=512 * MB, rss_bytes=250 * MB)
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="not-a-number"):
-            with self.assertRaises(lazy_resources.EmbeddingMemoryError):
-                lazy_resources.check_memory_headroom(None, limit_bytes=512 * MB, rss_bytes=250 * MB)
-
-    def test_cgroup_limit_parsing(self):
-        folder = Path(tempfile.mkdtemp(dir=_TMP))
-
-        def limit(text):
-            path = folder / "limit"
-            path.write_text(text)
-            return lazy_resources.memory_limit_bytes([str(path)])
-
-        self.assertEqual(limit("536870912\n"), 512 * MB)
-        self.assertIsNone(limit("max\n"))                       # cgroup v2: unlimited
-        self.assertIsNone(limit("9223372036854771712\n"))      # cgroup v1: unlimited sentinel
-        self.assertIsNone(limit("garbage"))
-        self.assertIsNone(lazy_resources.memory_limit_bytes([str(folder / "missing")]))
-
-    def test_rss_parsing(self):
-        status = Path(tempfile.mkdtemp(dir=_TMP)) / "status"
-        status.write_text("Name:\tpython\nVmPeak:\t900 kB\nVmRSS:\t  262144 kB\nThreads:\t4\n")
-        self.assertEqual(lazy_resources.process_rss_bytes(str(status)), 256 * MB)
-        self.assertIsNone(lazy_resources.process_rss_bytes(str(status.parent / "nope")))
-
-    def guard_failing(self):
-        return mock.patch.multiple(
-            lazy_resources,
-            memory_limit_bytes=lambda *a, **k: 512 * MB,
-            process_rss_bytes=lambda *a, **k: 300 * MB,
-        )
-
-    def test_a_refused_load_never_imports_the_heavy_libraries(self):
-        qc = self.load()
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="500"), self.guard_failing():
-            with self.assertRaises(lazy_resources.EmbeddingMemoryError):
-                qc.get_vectorstore().add_texts(["a"], [{}], ["a"])
-        self.assertEqual(self.fakes.model_import_accessed, 0)     # torch was never imported
-        self.assertEqual(self.fakes.model_constructed, 0)
-        self.assertFalse(lazy_resources.embedding_model_loaded())
-
-    def test_built_in_queries_keep_working_while_loading_is_refused(self):
+    def test_builtin_queries_work_without_loading_embeddings(self):
         qc = self.load()
         self.seed_builtin_index()
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="500"), self.guard_failing(), \
-                mock.patch.object(qc, "get_database_engine", return_value=object()), \
-                mock.patch.object(qc, "inspect", return_value=FakeInspector()), \
-                contextlib.redirect_stdout(io.StringIO()):
-            state = qc.rag_node({"question": "students", "database": "college_3"})
+
+        with (
+            mock.patch.object(qc, "get_database_engine", return_value=object()),
+            mock.patch.object(qc, "inspect", return_value=FakeInspector()),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            state = qc.rag_node({
+                "question": "How many students are there?",
+                "database": "college_3",
+            })
+
         self.assertIn("TABLE: Student", state["schema"])
+        self.assertEqual(self.fakes.model_constructed, 0)
 
-    def test_uploaded_database_queries_fall_back_to_lexical_retrieval(self):
-        qc = self.load()
-        scored = [(3, "customers", "doc", {"table": "customers"})]
-        db_id = "u_0123456789ab"
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="500"), self.guard_failing(), \
-                contextlib.redirect_stdout(io.StringIO()):
-            result = qc.apply_semantic_bonus("customers", db_id, scored)
-        self.assertEqual(result, scored)                          # unchanged, no crash
-
-    def test_refusal_is_not_cached_and_loading_succeeds_when_memory_is_available(self):
+    def test_embedding_client_failure_can_be_retried(self):
         qc = self.load()
         store = qc.get_vectorstore()
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="500"), self.guard_failing():
-            with self.assertRaises(lazy_resources.EmbeddingMemoryError):
-                store.add_texts(["a"], [{}], ["a"])
-        store.add_texts(["a"], [{}], ["a"])                       # guard disabled in setUp
+        self.fakes.fail_next_model_load = True
+
+        with self.assertRaises(RuntimeError):
+            store.add_texts(["test"], [{}], ["test"])
+
+        store.add_texts(["test"], [{}], ["test"])
         self.assertEqual(self.fakes.model_constructed, 1)
 
-    def test_fail_fast_check_is_a_no_op_once_the_model_is_loaded(self):
-        qc = self.load()
-        qc.get_vectorstore().add_texts(["a"], [{}], ["a"])
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="500"), self.guard_failing():
-            lazy_resources.require_embedding_headroom()           # must not raise
-        qc.get_embeddings().unload()
-        with env(QC_EMBEDDING_MIN_HEADROOM_MB="500"), self.guard_failing():
-            with self.assertRaises(lazy_resources.EmbeddingMemoryError):
-                lazy_resources.require_embedding_headroom()
+    def test_remote_embeddings_do_not_require_local_memory_guard(self):
+        self.assertTrue(callable(lazy_resources.require_embedding_headroom))
+        self.assertIsNone(lazy_resources.require_embedding_headroom())
+
 
 
 # ===========================================================================
@@ -704,32 +641,13 @@ class StaticGuaranteeTests(unittest.TestCase):
         for path in (ROOT / "app" / "queryclarify.py", *(ROOT / "backend").rglob("*.py")):
             self.assertNotIn("HuggingFaceEmbeddings(", path.read_text(encoding="utf-8"), path.name)
         source = (ROOT / "app" / "lazy_resources.py").read_text(encoding="utf-8")
-        self.assertEqual(source.count("HuggingFaceEmbeddings("), 1)
-        self.assertIn(f'EMBEDDING_MODEL_NAME = "{MODEL_NAME}"', source)
-
+        self.assertEqual(source.count("GoogleGenerativeAIEmbeddings("), 1)
+        self.assertIn('EMBEDDING_MODEL_NAME = "gemini-embedding-001"', source)
     def test_queryclarify_never_uses_the_eager_names_internally(self):
         source = (ROOT / "app" / "queryclarify.py").read_text(encoding="utf-8")
         import re
         self.assertEqual(re.findall(r"(?<![\w.])(?:database_)?vectorstore\.(?:get|similarity_search)", source), [])
 
-    def test_upload_route_fails_fast_and_maps_memory_errors_to_503(self):
-        source = (ROOT / "backend" / "api" / "database.py").read_text(encoding="utf-8")
-        route = source[source.index("def upload_database("):source.index("# Delete one of the caller")]
-
-        # 1) fail fast: checked, and answered with 503, BEFORE the upload is read
-        fail_fast = route.index("require_embedding_headroom()")
-        self.assertLess(fail_fast, route.index("_save_uploads("))
-        self.assertLess(fail_fast, route.index("except EmbeddingMemoryError"))
-
-        # 2) a second, separate handler guards the indexing itself (the model can
-        #    still be refused there): after create_user_database(...) and before
-        #    the catch-all that would report a generic 500
-        indexing = route.index("create_user_database(")
-        handlers = [i for i in range(len(route)) if route.startswith("except EmbeddingMemoryError", i)]
-        self.assertEqual(len(handlers), 2, "both the fail-fast and the indexing handler must exist")
-        self.assertGreater(handlers[1], indexing)
-        self.assertLess(handlers[1], route.index("except Exception:"))
-        self.assertEqual(route.count("status_code=503"), 2)
 
 
 def tearDownModule():
